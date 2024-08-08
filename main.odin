@@ -8,24 +8,53 @@ import mu "vendor:microui"
 import rl "vendor:raylib"
 
 state := struct {
-	mu_ctx:                        mu.Context,
-	log_buf:                       [1 << 16]byte,
-	log_buf_len:                   int,
-	log_buf_updated:               bool,
-	bg:                            mu.Color,
-	atlas_texture:                 rl.Texture2D,
+	mu_ctx:                       mu.Context,
+	log_buf:                      [1 << 16]byte,
+	log_buf_len:                  int,
+	log_buf_updated:              bool,
+	bg:                           mu.Color,
+	atlas_texture:                rl.Texture2D,
 	// new game
-	metal_ore:                     uint,
-	has_reached_chassis_minimums:  bool,
-	chassis:                       uint,
-	has_reached_battery_minimums:  bool,
-	batteries:                     uint,
-	has_reached_robot_minimums:    bool,
-	robots:                        uint,
-	robot_ore_collection_progress: f32,
+	metal_ore:                    uint,
+	has_reached_chassis_minimums: bool,
+	chassis_to_assemble:          uint,
+	chassis:                      uint,
+	has_reached_battery_minimums: bool,
+	batteries_to_assemble:        uint,
+	batteries:                    uint,
+	has_reached_robot_minimums:   bool,
+	robots_to_assemble:           uint,
+	robots:                       [dynamic]Robot,
+	shovels_to_assemble:          uint,
+	shovel_attachments:           uint,
 } {
 	bg = {90, 95, 100, 255},
 }
+
+
+Robot :: struct {
+	attachments:      Attachments,
+	progress_in_goal: f32,
+}
+Attachment :: enum {
+	Shovel,
+}
+Attachments :: distinct bit_set[Attachment]
+
+InputId :: enum mu.Id {
+	GATHER_ORE_BUTTON = 1,
+	ASSEMBLE_CHASSIS_BUTTON,
+	ASSEMBLE_BATTERY_BUTTON,
+	ASSEMBLE_ROBOT_BUTTON,
+	ASSEMBLE_SHOVEL_BUTTON,
+	ATTACH_SHOVEL_TO_ROBOT,
+}
+
+CHASSIS_INPUT_ID: uintptr = 0
+BATTERY_INPUT_ID: uintptr = 1
+ROBOT_INPUT_ID: uintptr = 2
+SHOVEL_INPUT_ID: uintptr = 3
+
 
 main :: proc() {
 	when ODIN_DEBUG {
@@ -80,22 +109,24 @@ main :: proc() {
 	ctx.text_width = mu.default_atlas_text_width
 	ctx.text_height = mu.default_atlas_text_height
 
+	state.robots = {}
+
 	rl.SetTargetFPS(60)
 	main_loop: for !rl.WindowShouldClose() {
-		{ 	// text input
-			text_input: [512]byte = ---
-			text_input_offset := 0
-			for text_input_offset < len(text_input) {
-				ch := rl.GetCharPressed()
-				if ch == 0 {
-					break
-				}
-				b, w := utf8.encode_rune(ch)
-				copy(text_input[text_input_offset:], b[:w])
-				text_input_offset += w
-			}
-			mu.input_text(ctx, string(text_input[:text_input_offset]))
-		}
+		// { 	// text input
+		// 	text_input: [512]byte = ---
+		// 	text_input_offset := 0
+		// 	for text_input_offset < len(text_input) {
+		// 		ch := rl.GetCharPressed()
+		// 		if ch == 0 {
+		// 			break
+		// 		}
+		// 		b, w := utf8.encode_rune(ch)
+		// 		copy(text_input[text_input_offset:], b[:w])
+		// 		text_input_offset += w
+		// 	}
+		// 	mu.input_text(ctx, string(text_input[:text_input_offset]))
+		// }
 
 		// mouse coordinates
 		mouse_pos := [2]i32{rl.GetMouseX(), rl.GetMouseY()}
@@ -154,12 +185,16 @@ main :: proc() {
 game_tick :: proc() {
 	delta_time := rl.GetFrameTime()
 
-	state.robot_ore_collection_progress += f32(state.robots) * delta_time
+	for &robot in state.robots {
+		if .Shovel in robot.attachments {
+			robot.progress_in_goal += delta_time
 
-	ore_to_collect := uint(state.robot_ore_collection_progress / 3)
-
-	increment_metal_ore(ore_to_collect)
-	state.robot_ore_collection_progress -= f32(ore_to_collect * 3)
+			if robot.progress_in_goal >= 3 {
+				increment_metal_ore(2)
+				robot.progress_in_goal -= 3
+			}
+		}
+	}
 }
 
 render :: proc(ctx: ^mu.Context) {
@@ -224,6 +259,26 @@ u8_slider :: proc(ctx: ^mu.Context, val: ^u8, lo, hi: u8) -> (res: mu.Result_Set
 	return
 }
 
+
+uint_slider :: proc(
+	ctx: ^mu.Context,
+	val: ^uint,
+	lo, hi: uint,
+	id: uintptr,
+) -> (
+	res: mu.Result_Set,
+) {
+	mu.push_id(ctx, id)
+
+	@(static)
+	tmp: mu.Real
+	tmp = mu.Real(val^)
+	res = mu.slider(ctx, &tmp, mu.Real(lo), mu.Real(hi), 0, "%.0f", {.ALIGN_CENTER})
+	val^ = uint(tmp)
+	mu.pop_id(ctx)
+	return
+}
+
 write_log :: proc(str: string) {
 	state.log_buf_len += copy(state.log_buf[state.log_buf_len:], str)
 	state.log_buf_len += copy(state.log_buf[state.log_buf_len:], "\n")
@@ -246,11 +301,13 @@ increment_chassis :: proc(increment_by: uint) {
 		if state.metal_ore >= CHASIS_METAL_ORE_COST {
 			state.chassis += 1
 			state.metal_ore -= CHASIS_METAL_ORE_COST
+		} else {
+			break
 		}
+	}
 
-		if !state.has_reached_battery_minimums && state.chassis >= 1 {
-			state.has_reached_battery_minimums = true
-		}
+	if !state.has_reached_battery_minimums && state.chassis >= 2 {
+		state.has_reached_battery_minimums = true
 	}
 }
 
@@ -261,11 +318,14 @@ increment_battery :: proc(increment_by: uint) {
 		if state.metal_ore >= BATTERY_METAL_ORE_COST {
 			state.batteries += 1
 			state.metal_ore -= BATTERY_METAL_ORE_COST
-		}
 
-		if !state.has_reached_robot_minimums && state.batteries >= 2 {
-			state.has_reached_robot_minimums = true
+		} else {
+			break
 		}
+	}
+
+	if !state.has_reached_robot_minimums && state.batteries >= 3 {
+		state.has_reached_robot_minimums = true
 	}
 }
 
@@ -275,9 +335,24 @@ ROBOT_BATTERY_COST: uint = 2
 increment_robot :: proc(increment_by: uint) {
 	for i := increment_by; i > 0; i -= 1 {
 		if state.chassis >= ROBOT_CHASSIS_COST && state.batteries >= ROBOT_BATTERY_COST {
-			state.robots += 1
+			append(&state.robots, Robot{})
 			state.chassis -= ROBOT_CHASSIS_COST
 			state.batteries -= ROBOT_BATTERY_COST
+		} else {
+			break
+		}
+	}
+}
+
+SHOVEL_COST: uint = 10
+
+increment_shovels :: proc(increment_by: uint) {
+	for i := increment_by; i > 0; i -= 1 {
+		if state.metal_ore >= SHOVEL_COST {
+			state.shovel_attachments += 1
+			state.metal_ore -= SHOVEL_COST
+		} else {
+			break
 		}
 	}
 }
@@ -295,32 +370,90 @@ all_windows :: proc(ctx: ^mu.Context) {
 	@(static)
 	opts := mu.Options{.NO_CLOSE}
 
-	if mu.window(ctx, "Game", {20, 20, 500, 300}, opts) {
-		mu.layout_row(ctx, {-1}, 0)
-		if .SUBMIT in mu.button(ctx, "Gather ore by hand") {
+	if mu.window(ctx, "Actions", {340, 20, 500, 300}, opts) {
+		mu.layout_row(ctx, {268, -1}, 0)
+		mu.label(ctx, "")
+		if .SUBMIT in button(ctx, "Gather ore by hand", mu.Id(InputId.GATHER_ORE_BUTTON)) {
 			increment_metal_ore(1)
 		}
 
 		if state.has_reached_chassis_minimums {
-			if .SUBMIT in mu.button(ctx, "Assemble chassis") {
-				increment_chassis(1)
+			mu.layout_row(ctx, {60, 60, 140, -1}, 0)
+			mu.label(ctx, "Chassis")
+			uint_slider(
+				ctx,
+				&state.chassis_to_assemble,
+				0,
+				uint(state.metal_ore / CHASIS_METAL_ORE_COST),
+				CHASSIS_INPUT_ID,
+			)
+			mu.label(ctx, fmt.tprintf("x %d metal ore", CHASIS_METAL_ORE_COST))
+
+			if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_CHASSIS_BUTTON)) {
+				increment_chassis(state.chassis_to_assemble)
 			}
 		}
 
 		if state.has_reached_battery_minimums {
-			if .SUBMIT in mu.button(ctx, "Assemble battery") {
-				increment_battery(1)
+			mu.layout_row(ctx, {60, 60, 140, -1}, 0)
+			mu.label(ctx, "Batteries")
+			uint_slider(
+				ctx,
+				&state.batteries_to_assemble,
+				0,
+				uint(state.metal_ore / BATTERY_METAL_ORE_COST),
+				BATTERY_INPUT_ID,
+			)
+			mu.label(ctx, fmt.tprintf("x %d metal ore", BATTERY_METAL_ORE_COST))
+
+			if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_BATTERY_BUTTON)) {
+				increment_battery(state.batteries_to_assemble)
 			}
 		}
 
 		if state.has_reached_robot_minimums {
-			if .SUBMIT in mu.button(ctx, "Assemble robot") {
-				increment_robot(1)
+			mu.layout_row(ctx, {60, 60, 140, -1}, 0)
+			mu.label(ctx, "Robot")
+			uint_slider(
+				ctx,
+				&state.robots_to_assemble,
+				0,
+				min(
+					uint(state.chassis / ROBOT_CHASSIS_COST),
+					uint(state.batteries / ROBOT_BATTERY_COST),
+				),
+				ROBOT_INPUT_ID,
+			)
+			mu.label(
+				ctx,
+				fmt.tprintf(
+					"x %d chassis & x %d batteries",
+					ROBOT_CHASSIS_COST,
+					ROBOT_BATTERY_COST,
+				),
+			)
+
+			if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_ROBOT_BUTTON)) {
+				increment_robot(state.robots_to_assemble)
+			}
+
+			mu.label(ctx, "Shovel")
+			uint_slider(
+				ctx,
+				&state.shovels_to_assemble,
+				0,
+				uint(state.metal_ore / SHOVEL_COST),
+				SHOVEL_INPUT_ID,
+			)
+			mu.label(ctx, fmt.tprintf("x %d ore", SHOVEL_COST))
+
+			if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_SHOVEL_BUTTON)) {
+				increment_shovels(state.shovels_to_assemble)
 			}
 		}
 	}
 
-	if mu.window(ctx, "State", {540, 20, 300, 400}, opts) {
+	if mu.window(ctx, "State", {20, 20, 300, 400}, opts) {
 		mu.layout_row(ctx, {60, -1}, 0)
 		mu.label(ctx, "Metal ore:")
 		mu.label(ctx, fmt.tprintf("%d", state.metal_ore))
@@ -336,8 +469,37 @@ all_windows :: proc(ctx: ^mu.Context) {
 		}
 
 		if state.has_reached_robot_minimums {
+			mu.label(ctx, "Shovels:")
+			mu.label(ctx, fmt.tprintf("%d", state.shovel_attachments))
+
+			mu.layout_row(ctx, {60}, 0)
 			mu.label(ctx, "Robots:")
-			mu.label(ctx, fmt.tprintf("%d", state.robots))
+			mu.layout_row(ctx, {60, 100, -1}, 0)
+			for &robot, i in state.robots {
+				mu.label(ctx, fmt.tprintf("Robot %d:", i))
+				mu.label(ctx, .Shovel in robot.attachments ? "Shoveling ore" : "Waiting for task")
+
+				if .Shovel in robot.attachments {
+					mu.label(
+						ctx,
+						fmt.tprintf("Progress %3.1f%%", robot.progress_in_goal / 3 * 100),
+					)
+				} else {
+					if .SUBMIT in
+					   button(
+						   ctx,
+						   "Attach shovel",
+						   mu.Id(u32(InputId.ATTACH_SHOVEL_TO_ROBOT) + 1000 + u32(i)),
+					   ) {
+						if state.shovel_attachments > 0 {
+							robot.attachments += {.Shovel}
+							state.shovel_attachments -= 1
+						}
+					}
+				}
+			}
+
+
 		}
 	}
 
@@ -502,4 +664,32 @@ all_windows :: proc(ctx: ^mu.Context) {
 	// 		mu.draw_rect(ctx, mu.layout_next(ctx), ctx.style.colors[col])
 	// 	}
 	// }
+}
+
+
+button :: proc(
+	ctx: ^mu.Context,
+	label: string,
+	id: mu.Id,
+	icon: mu.Icon = .NONE,
+	opt: mu.Options = {mu.Opt.ALIGN_CENTER},
+) -> (
+	res: mu.Result_Set,
+) {
+	r := mu.layout_next(ctx)
+	mu.update_control(ctx, id, r, opt)
+	/* handle click */
+	if ctx.mouse_pressed_bits == {.LEFT} && ctx.focus_id == id {
+		res += {.SUBMIT}
+	}
+
+	/* draw */
+	mu.draw_control_frame(ctx, id, r, mu.Color_Type.BUTTON, opt)
+	if len(label) > 0 {
+		mu.draw_control_text(ctx, label, r, mu.Color_Type.TEXT, opt)
+	}
+	if icon != .NONE {
+		mu.draw_icon(ctx, icon, r, ctx.style.colors[.TEXT])
+	}
+	return
 }
