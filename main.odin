@@ -27,10 +27,12 @@ state := struct {
 	robots:                       [dynamic]Robot,
 	shovels_to_assemble:          uint,
 	shovel_attachments:           uint,
+	// resources
+	ui_atlas:                     rl.Texture,
+	ui_font:                      rl.Font,
 } {
 	bg = {90, 95, 100, 255},
 }
-
 
 Robot :: struct {
 	attachments:      Attachments,
@@ -103,6 +105,17 @@ main :: proc() {
 	state.atlas_texture = rl.LoadTextureFromImage(image)
 	defer rl.UnloadTexture(state.atlas_texture)
 
+	state.ui_atlas = rl.LoadTexture("resources/Ui Space Pack/Spritesheet/uipackSpace_sheet.png")
+	defer rl.UnloadTexture(state.ui_atlas)
+	state.ui_font = rl.LoadFontEx(
+		"resources/Ui Space Pack/Fonts/kenvector_future_thin.ttf",
+		32,
+		{},
+		62,
+	)
+	defer rl.UnloadFont(state.ui_font)
+
+
 	ctx := &state.mu_ctx
 	mu.init(ctx)
 
@@ -110,7 +123,7 @@ main :: proc() {
 	ctx.text_height = mu.default_atlas_text_height
 
 	state.robots = {}
-
+	//
 	rl.SetTargetFPS(60)
 	main_loop: for !rl.WindowShouldClose() {
 		// { 	// text input
@@ -174,9 +187,9 @@ main :: proc() {
 
 		game_tick()
 
-		mu.begin(ctx)
-		all_windows(ctx)
-		mu.end(ctx)
+		// mu.begin(ctx)
+		// all_windows(ctx)
+		// mu.end(ctx)
 
 		render(ctx)
 	}
@@ -198,12 +211,12 @@ game_tick :: proc() {
 }
 
 render :: proc(ctx: ^mu.Context) {
-	render_texture :: proc(rect: mu.Rect, pos: [2]i32, color: mu.Color) {
-		source := rl.Rectangle{f32(rect.x), f32(rect.y), f32(rect.w), f32(rect.h)}
-		position := rl.Vector2{f32(pos.x), f32(pos.y)}
+	// render_texture :: proc(rect: mu.Rect, pos: [2]i32, color: mu.Color) {
+	// 	source := rl.Rectangle{f32(rect.x), f32(rect.y), f32(rect.w), f32(rect.h)}
+	// 	position := rl.Vector2{f32(pos.x), f32(pos.y)}
 
-		rl.DrawTextureRec(state.atlas_texture, source, position, transmute(rl.Color)color)
-	}
+	// 	rl.DrawTextureRec(state.atlas_texture, source, position, transmute(rl.Color)color)
+	// }
 
 	rl.ClearBackground(transmute(rl.Color)state.bg)
 
@@ -213,37 +226,78 @@ render :: proc(ctx: ^mu.Context) {
 	rl.BeginScissorMode(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight())
 	defer rl.EndScissorMode()
 
-	command_backing: ^mu.Command
-	for variant in mu.next_command_iterator(ctx, &command_backing) {
-		switch cmd in variant {
-		case ^mu.Command_Text:
-			pos := [2]i32{cmd.pos.x, cmd.pos.y}
-			for ch in cmd.str do if ch & 0xc0 != 0x80 {
-				r := min(int(ch), 127)
-				rect := mu.default_atlas[mu.DEFAULT_ATLAS_FONT + r]
-				render_texture(rect, pos, cmd.color)
-				pos.x += rect.w
-			}
-		case ^mu.Command_Rect:
-			rl.DrawRectangle(
-				cmd.rect.x,
-				cmd.rect.y,
-				cmd.rect.w,
-				cmd.rect.h,
-				transmute(rl.Color)cmd.color,
-			)
-		case ^mu.Command_Icon:
-			rect := mu.default_atlas[cmd.id]
-			x := cmd.rect.x + (cmd.rect.w - rect.w) / 2
-			y := cmd.rect.y + (cmd.rect.h - rect.h) / 2
-			render_texture(rect, {x, y}, cmd.color)
-		case ^mu.Command_Clip:
-			rl.EndScissorMode()
-			rl.BeginScissorMode(cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h)
-		case ^mu.Command_Jump:
-			unreachable()
-		}
+	mouse_pos := rl.GetMousePosition()
+	button_pos := rl.Rectangle {
+		x      = 50, // Rectangle top-left corner position x
+		y      = 50, // Rectangle top-left corner position y
+		width  = 116, // Rectangle width
+		height = 40, // Rectangle height
 	}
+
+	mouse_over := rl.CheckCollisionPointRec(mouse_pos, button_pos)
+	mouse_down := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
+	mouse_released := rl.IsMouseButtonReleased(rl.MouseButton.LEFT)
+
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 200, // Rectangle top-left corner position x
+				y      = 300, // Rectangle top-left corner position y
+				width  = 100, // Rectangle width
+				height = 100, // Rectangle height
+			}, // Texture source rectangle
+			left = 4, // Left border offset
+			top = 8, // Top border offset
+			right = 4, // Right border offset
+			bottom = 8, // Bottom border offset
+			layout = rl.NPatchLayout.NINE_PATCH, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		button_pos,
+		{0, 0},
+		0,
+		mouse_over ? rl.ORANGE : rl.WHITE,
+	)
+	rl.DrawTextEx(
+		state.ui_font,
+		"HELLO",
+		{58, 54},
+		32,
+		0,
+		mouse_over && mouse_down ? rl.ORANGE : rl.WHITE,
+	)
+
+	// command_backing: ^mu.Command
+	// for variant in mu.next_command_iterator(ctx, &command_backing) {
+	// 	switch cmd in variant {
+	// 	case ^mu.Command_Text:
+	// 		pos := [2]i32{cmd.pos.x, cmd.pos.y}
+	// 		for ch in cmd.str do if ch & 0xc0 != 0x80 {
+	// 			r := min(int(ch), 127)
+	// 			rect := mu.default_atlas[mu.DEFAULT_ATLAS_FONT + r]
+	// 			render_texture(rect, pos, cmd.color)
+	// 			pos.x += rect.w
+	// 		}
+	// 	case ^mu.Command_Rect:
+	// 		rl.DrawRectangle(
+	// 			cmd.rect.x,
+	// 			cmd.rect.y,
+	// 			cmd.rect.w,
+	// 			cmd.rect.h,
+	// 			transmute(rl.Color)cmd.color,
+	// 		)
+	// 	case ^mu.Command_Icon:
+	// 		rect := mu.default_atlas[cmd.id]
+	// 		x := cmd.rect.x + (cmd.rect.w - rect.w) / 2
+	// 		y := cmd.rect.y + (cmd.rect.h - rect.h) / 2
+	// 		render_texture(rect, {x, y}, cmd.color)
+	// 	case ^mu.Command_Clip:
+	// 		rl.EndScissorMode()
+	// 		rl.BeginScissorMode(cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h)
+	// 	case ^mu.Command_Jump:
+	// 		unreachable()
+	// 	}
+	// }
 }
 
 
