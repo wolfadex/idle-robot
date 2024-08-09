@@ -2,7 +2,9 @@ package main
 
 import "core:fmt"
 import "core:log"
+import math "core:math/big"
 import "core:mem"
+import "core:strconv"
 import "core:strings"
 import "core:unicode/utf8"
 import mu "vendor:microui"
@@ -31,6 +33,10 @@ state := struct {
 	// resources
 	ui_atlas:                     rl.Texture,
 	ui_font:                      rl.Font,
+	// UI state
+	focused_input:                union {
+		InputId,
+	},
 } {
 	bg = {90, 95, 100, 255},
 }
@@ -44,19 +50,20 @@ Attachment :: enum {
 }
 Attachments :: distinct bit_set[Attachment]
 
-InputId :: enum mu.Id {
+InputId :: enum uint {
 	GATHER_ORE_BUTTON = 1,
 	ASSEMBLE_CHASSIS_BUTTON,
 	ASSEMBLE_BATTERY_BUTTON,
 	ASSEMBLE_ROBOT_BUTTON,
 	ASSEMBLE_SHOVEL_BUTTON,
 	ATTACH_SHOVEL_TO_ROBOT,
+	CHASSIS_INPUT_NUMBER,
 }
 
-CHASSIS_INPUT_ID: uintptr = 0
-BATTERY_INPUT_ID: uintptr = 1
-ROBOT_INPUT_ID: uintptr = 2
-SHOVEL_INPUT_ID: uintptr = 3
+// CHASSIS_INPUT_ID: uintptr = 0
+// BATTERY_INPUT_ID: uintptr = 1
+// ROBOT_INPUT_ID: uintptr = 2
+// SHOVEL_INPUT_ID: uintptr = 3
 
 
 main :: proc() {
@@ -227,7 +234,7 @@ render :: proc(ctx: ^mu.Context) {
 	rl.BeginScissorMode(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight())
 	defer rl.EndScissorMode()
 
-	if button({50, 50}, "GATHER ORE") {
+	if button({50, 50}, "GATHER ORE", .GATHER_ORE_BUTTON) {
 		increment_metal_ore(1)
 	}
 
@@ -255,9 +262,11 @@ render :: proc(ctx: ^mu.Context) {
 	// if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_CHASSIS_BUTTON)) {
 	// 	increment_chassis(state.chassis_to_assemble)
 	// }
-	if button({50, 100}, "ASSEMBLE") {
-
+	if button({50, 100}, "ASSEMBLE", .ASSEMBLE_CHASSIS_BUTTON) {
+		increment_chassis(state.chassis_to_assemble)
 	}
+
+	input_uint({250, 100}, 100, &state.chassis_to_assemble, .CHASSIS_INPUT_NUMBER)
 	// }
 
 
@@ -283,12 +292,22 @@ uint_slider :: proc(
 }
 
 increment_metal_ore :: proc(increment_by: uint) {
+	pre_max_chassis := uint(state.metal_ore / CHASIS_METAL_ORE_COST)
+	at_max_chassis := pre_max_chassis == state.chassis_to_assemble
+
 	state.metal_ore += increment_by
 
 	if !state.has_reached_chassis_minimums && state.metal_ore >= CHASIS_METAL_ORE_COST {
 		state.has_reached_chassis_minimums = true
 	}
 
+	if at_max_chassis {
+		post_max_chassis := uint(state.metal_ore / CHASIS_METAL_ORE_COST)
+
+		if post_max_chassis > pre_max_chassis {
+			state.chassis_to_assemble = post_max_chassis
+		}
+	}
 }
 
 CHASIS_METAL_ORE_COST: uint = 20
@@ -683,7 +702,7 @@ increment_shovels :: proc(increment_by: uint) {
 // 	return
 // }
 
-button :: proc(pos: rl.Vector2, text: string) -> bool {
+button :: proc(pos: rl.Vector2, text: string, id: InputId) -> bool {
 	text_width := len(text)
 	spaces := space_count(text)
 	button_pos := rl.Rectangle {
@@ -697,6 +716,12 @@ button :: proc(pos: rl.Vector2, text: string) -> bool {
 	mouse_over := rl.CheckCollisionPointRec(mouse_pos, button_pos)
 	mouse_down := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
 	mouse_pressed := rl.IsMouseButtonPressed(rl.MouseButton.LEFT)
+	is_focused := state.focused_input == id
+
+	if !is_focused && mouse_over && mouse_pressed {
+		state.focused_input = id
+	}
+
 
 	rl.DrawTextureNPatch(
 		state.ui_atlas,
@@ -716,7 +741,9 @@ button :: proc(pos: rl.Vector2, text: string) -> bool {
 		button_pos,
 		{0, 0},
 		0,
-		mouse_over ? rl.ORANGE : rl.WHITE,
+		mouse_over \
+		? EXTRA_LIGHT_ORANGE \
+		: mouse_over && mouse_pressed ? rl.ORANGE : is_focused ? LIGHT_ORANGE : rl.WHITE,
 	)
 
 	txt := strings.clone_to_cstring(text)
@@ -746,3 +773,83 @@ space_count :: proc(str: string) -> uint {
 
 	return count
 }
+
+
+input_uint :: proc(pos: rl.Vector2, width: f32, value: ^uint, id: InputId) {
+	input_pos := rl.Rectangle {
+		x      = pos.x,
+		y      = pos.y,
+		width  = width,
+		height = 40,
+	}
+	input_border_pos := rl.Rectangle {
+		x      = pos.x - 8,
+		y      = pos.y - 8,
+		width  = width + 16,
+		height = 56,
+	}
+
+	mouse_pos := rl.GetMousePosition()
+	mouse_over := rl.CheckCollisionPointRec(mouse_pos, input_border_pos)
+	mouse_down := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
+	mouse_pressed := rl.IsMouseButtonPressed(rl.MouseButton.LEFT)
+	is_focused := state.focused_input == id
+
+	if !is_focused && mouse_over && mouse_pressed {
+		state.focused_input = id
+	}
+
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 200, // Rectangle top-left corner position x
+				y      = 200, // Rectangle top-left corner position y
+				width  = 100, // Rectangle width
+				height = 100, // Rectangle height
+			}, // Texture source rectangle
+			left = 10, // Left border offset
+			top = 10, // Top border offset
+			right = 10, // Right border offset
+			bottom = 10, // Bottom border offset
+			layout = rl.NPatchLayout.NINE_PATCH, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		input_border_pos,
+		{0, 0},
+		0,
+		mouse_over \
+		? EXTRA_LIGHT_ORANGE \
+		: mouse_over && mouse_pressed ? rl.ORANGE : is_focused ? LIGHT_ORANGE : rl.WHITE,
+	)
+
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 0, // Rectangle top-left corner position x
+				y      = 0, // Rectangle top-left corner position y
+				width  = 100, // Rectangle width
+				height = 100, // Rectangle height
+			}, // Texture source rectangle
+			left = 4, // Left border offset
+			top = 4, // Top border offset
+			right = 4, // Right border offset
+			bottom = 4, // Bottom border offset
+			layout = rl.NPatchLayout.NINE_PATCH, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		input_pos,
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
+
+	val_buf: [256]u8
+	val_str := strconv.itoa(val_buf[:], int(value^))
+	txt := strings.clone_to_cstring(val_str)
+	defer delete_cstring(txt)
+
+	rl.DrawTextEx(state.ui_font, txt, {pos.x + 8, pos.y + 4}, 32, 0, rl.WHITE)
+}
+
+LIGHT_ORANGE := rl.Color{255, 191, 30, 255}
+EXTRA_LIGHT_ORANGE := rl.Color{255, 221, 60, 255}
