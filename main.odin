@@ -7,6 +7,7 @@ import "core:mem"
 import "core:strconv"
 import "core:strings"
 import "core:unicode/utf8"
+import "core:unicode/utf8/utf8string"
 import mu "vendor:microui"
 import rl "vendor:raylib"
 
@@ -32,10 +33,11 @@ state := struct {
 	shovel_attachments:           uint,
 	// resources
 	ui_atlas:                     rl.Texture,
+	ui_arrow:                     rl.Texture,
 	ui_font:                      rl.Font,
 	// UI state
-	focused_input:                union {
-		InputId,
+	focus:                        union {
+		FocusState,
 	},
 } {
 	bg = {90, 95, 100, 255},
@@ -58,6 +60,13 @@ InputId :: enum uint {
 	ASSEMBLE_SHOVEL_BUTTON,
 	ATTACH_SHOVEL_TO_ROBOT,
 	CHASSIS_INPUT_NUMBER,
+	BATTERY_INPUT_NUMBER,
+	ROBOT_INPUT_NUMBER,
+}
+
+FocusState :: struct {
+	id:         InputId,
+	cursor_pos: uint,
 }
 
 // CHASSIS_INPUT_ID: uintptr = 0
@@ -94,7 +103,7 @@ main :: proc() {
 		defer reset_tracking_allocator(&tracking_allocator)
 	}
 
-	rl.InitWindow(960, 540, "More Robots!")
+	rl.InitWindow(1368, 800, "More Robots!")
 	defer rl.CloseWindow()
 
 	pixels := make([][4]u8, mu.DEFAULT_ATLAS_WIDTH * mu.DEFAULT_ATLAS_HEIGHT)
@@ -115,6 +124,9 @@ main :: proc() {
 
 	state.ui_atlas = rl.LoadTexture("resources/Ui Space Pack/Spritesheet/uipackSpace_sheet.png")
 	defer rl.UnloadTexture(state.ui_atlas)
+	state.ui_arrow = rl.LoadTexture("resources/Ui Base Pack/PNG/Blue/Default/arrow_basic_e.png")
+	defer rl.UnloadTexture(state.ui_arrow)
+
 	state.ui_font = rl.LoadFontEx(
 		"resources/Ui Space Pack/Fonts/kenvector_future_thin.ttf",
 		32,
@@ -234,42 +246,278 @@ render :: proc(ctx: ^mu.Context) {
 	rl.BeginScissorMode(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight())
 	defer rl.EndScissorMode()
 
-	if button({50, 50}, "GATHER ORE", .GATHER_ORE_BUTTON) {
-		increment_metal_ore(1)
-	}
+	// BACKGROUND 1
 
-	rl.DrawTextEx(
-		state.ui_font,
-		fmt.ctprintf("METAL ORE: %d", state.metal_ore),
-		{260, 54},
-		32,
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 100, // Rectangle top-left corner position x
+				y      = 0, // Rectangle top-left corner position y
+				width  = 60, // Rectangle width
+				height = 30, // Rectangle height
+			}, // Texture source rectangle
+			left = 8, // Left border offset
+			top = 0, // Top border offset
+			right = 12, // Right border offset
+			bottom = 0, // Bottom border offset
+			layout = rl.NPatchLayout.THREE_PATCH_HORIZONTAL, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		{x = 20, y = 20, width = 150, height = 31},
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 160, // Rectangle top-left corner position x
+				y      = 0, // Rectangle top-left corner position y
+				width  = 40, // Rectangle width
+				height = 30, // Rectangle height
+			}, // Texture source rectangle
+			left = 10, // Left border offset
+			top = 10, // Top border offset
+			right = 10, // Right border offset
+			bottom = 10, // Bottom border offset
+			layout = rl.NPatchLayout.THREE_PATCH_HORIZONTAL, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		{x = 170, y = 20, width = 750, height = 31},
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 100, // Rectangle top-left corner position x
+				y      = 31, // Rectangle top-left corner position y
+				width  = 100, // Rectangle width
+				height = 69, // Rectangle height
+			}, // Texture source rectangle
+			left = 10, // Left border offset
+			top = 10, // Top border offset
+			right = 10, // Right border offset
+			bottom = 10, // Bottom border offset
+			layout = rl.NPatchLayout.NINE_PATCH, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		{x = 20, y = 50, width = 900, height = 500},
+		{0, 0},
 		0,
 		rl.WHITE,
 	)
 
-	// if state.has_reached_chassis_minimums {
-	// mu.layout_row(ctx, {60, 60, 140, -1}, 0)
-	// mu.label(ctx, "Chassis")
-	// uint_slider(
-	// 	ctx,
-	// 	&state.chassis_to_assemble,
-	// 	0,
-	// 	uint(state.metal_ore / CHASIS_METAL_ORE_COST),
-	// 	CHASSIS_INPUT_ID,
-	// )
-	// mu.label(ctx, fmt.tprintf("x %d metal ore", CHASIS_METAL_ORE_COST))
+	rl.DrawTextEx(state.ui_font, "GATHER", {30, 20}, 32, 0, rl.WHITE)
 
-	// if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_CHASSIS_BUTTON)) {
-	// 	increment_chassis(state.chassis_to_assemble)
-	// }
-	if button({50, 100}, "ASSEMBLE", .ASSEMBLE_CHASSIS_BUTTON) {
-		increment_chassis(state.chassis_to_assemble)
+	// BACKGROUND 2
+
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 200, // Rectangle top-left corner position x
+				y      = 0, // Rectangle top-left corner position y
+				width  = 60, // Rectangle width
+				height = 30, // Rectangle height
+			}, // Texture source rectangle
+			left = 8, // Left border offset
+			top = 0, // Top border offset
+			right = 12, // Right border offset
+			bottom = 0, // Bottom border offset
+			layout = rl.NPatchLayout.THREE_PATCH_HORIZONTAL, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		{x = 930, y = 20, width = 150, height = 31},
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 260, // Rectangle top-left corner position x
+				y      = 0, // Rectangle top-left corner position y
+				width  = 40, // Rectangle width
+				height = 30, // Rectangle height
+			}, // Texture source rectangle
+			left = 10, // Left border offset
+			top = 10, // Top border offset
+			right = 10, // Right border offset
+			bottom = 10, // Bottom border offset
+			layout = rl.NPatchLayout.THREE_PATCH_HORIZONTAL, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		{x = 1_080, y = 20, width = 250, height = 31},
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
+	rl.DrawTextureNPatch(
+		state.ui_atlas,
+		{
+			source = {
+				x      = 200, // Rectangle top-left corner position x
+				y      = 31, // Rectangle top-left corner position y
+				width  = 100, // Rectangle width
+				height = 69, // Rectangle height
+			}, // Texture source rectangle
+			left = 10, // Left border offset
+			top = 10, // Top border offset
+			right = 10, // Right border offset
+			bottom = 10, // Bottom border offset
+			layout = rl.NPatchLayout.NINE_PATCH, // Layout of the n-patch: 3x3, 1x3 or 3x1
+		},
+		{x = 930, y = 50, width = 400, height = 500},
+		{0, 0},
+		0,
+		rl.WHITE,
+	)
+
+	rl.DrawTextEx(state.ui_font, "COUNTS", {940, 20}, 32, 0, rl.WHITE)
+
+
+	// INPUTS
+
+	if button({30, 55}, "GATHER ORE", .GATHER_ORE_BUTTON) {
+		increment_metal_ore(1)
 	}
 
-	input_uint({250, 100}, 100, &state.chassis_to_assemble, .CHASSIS_INPUT_NUMBER)
-	// }
+	rl.DrawTextEx(state.ui_font, "METAL ORE:", {940, 59}, 32, 0, rl.WHITE)
+	rl.DrawTextEx(
+		state.ui_font,
+		fmt.ctprintf("%d", state.metal_ore),
+		{1_120, 59},
+		32,
+		0,
+		rl.ORANGE,
+	)
 
+	if state.has_reached_chassis_minimums {
+		if button({30, 110}, "ASSEMBLE", .ASSEMBLE_CHASSIS_BUTTON) {
+			increment_chassis(state.chassis_to_assemble)
+		}
 
+		input_uint({230, 110}, 100, &state.chassis_to_assemble, .CHASSIS_INPUT_NUMBER)
+		rl.DrawTextEx(
+			state.ui_font,
+			fmt.ctprintf(
+				"CHASSIS, %d METAL ORE",
+				CHASIS_METAL_ORE_COST * state.chassis_to_assemble,
+			),
+			{350, 115},
+			32,
+			0,
+			rl.WHITE,
+		)
+
+		rl.DrawTextEx(state.ui_font, "CHASSIS:", {940, 114}, 32, 0, rl.WHITE)
+		rl.DrawTextEx(
+			state.ui_font,
+			fmt.ctprintf("%d", state.chassis),
+			{1_080, 114},
+			32,
+			0,
+			rl.ORANGE,
+		)
+	}
+
+	if state.has_reached_battery_minimums {
+		if button({30, 170}, "ASSEMBLE", .ASSEMBLE_BATTERY_BUTTON) {
+			increment_battery(state.batteries_to_assemble)
+		}
+
+		input_uint({230, 170}, 100, &state.batteries_to_assemble, .BATTERY_INPUT_NUMBER)
+		rl.DrawTextEx(
+			state.ui_font,
+			fmt.ctprintf(
+				"BATTERIES, %d METAL ORE",
+				BATTERY_METAL_ORE_COST * state.batteries_to_assemble,
+			),
+			{350, 175},
+			32,
+			0,
+			rl.WHITE,
+		)
+
+		rl.DrawTextEx(state.ui_font, "BATTERIES:", {940, 174}, 32, 0, rl.WHITE)
+		rl.DrawTextEx(
+			state.ui_font,
+			fmt.ctprintf("%d", state.batteries),
+			{1_115, 174},
+			32,
+			0,
+			rl.ORANGE,
+		)
+	}
+
+	if state.has_reached_robot_minimums {
+		if button({30, 231}, "ASSEMBLE", .ASSEMBLE_ROBOT_BUTTON) {
+			increment_robot(state.robots_to_assemble)
+		}
+
+		input_uint({230, 231}, 100, &state.robots_to_assemble, .ROBOT_INPUT_NUMBER)
+		rl.DrawTextEx(
+			state.ui_font,
+			fmt.ctprintf(
+				"ROBOTS, %d CHASSIS, %d BATTERIES",
+				ROBOT_CHASSIS_COST * state.robots_to_assemble,
+				ROBOT_BATTERY_COST * state.robots_to_assemble,
+			),
+			{350, 236},
+			32,
+			0,
+			rl.WHITE,
+		)
+
+		rl.DrawTextEx(state.ui_font, "ROBOTS:", {940, 235}, 32, 0, rl.WHITE)
+		rl.DrawTextEx(
+			state.ui_font,
+			fmt.ctprintf("%d", len(state.robots)),
+			{1_080, 235},
+			32,
+			0,
+			rl.ORANGE,
+		)
+		// 			mu.layout_row(ctx, {60, 60, 140, -1}, 0)
+		// 			mu.label(ctx, "Robot")
+		// 			uint_slider(
+		// 				ctx,
+		// 				&state.robots_to_assemble,
+		// 				0,
+		// 				min(
+		// 					uint(state.chassis / ROBOT_CHASSIS_COST),
+		// 					uint(state.batteries / ROBOT_BATTERY_COST),
+		// 				),
+		// 				ROBOT_INPUT_ID,
+		// 			)
+		// 			mu.label(
+		// 				ctx,
+		// 				fmt.tprintf(
+		// 					"x %d chassis & x %d batteries",
+		// 					ROBOT_CHASSIS_COST,
+		// 					ROBOT_BATTERY_COST,
+		// 				),
+		// 			)
+
+		// 			if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_ROBOT_BUTTON)) {
+		// 				increment_robot(state.robots_to_assemble)
+		// 			}
+
+		// 			mu.label(ctx, "Shovel")
+		// 			uint_slider(
+		// 				ctx,
+		// 				&state.shovels_to_assemble,
+		// 				0,
+		// 				uint(state.metal_ore / SHOVEL_COST),
+		// 				SHOVEL_INPUT_ID,
+		// 			)
+		// 			mu.label(ctx, fmt.tprintf("x %d ore", SHOVEL_COST))
+
+		// 			if .SUBMIT in button(ctx, "Assemble", mu.Id(InputId.ASSEMBLE_SHOVEL_BUTTON)) {
+		// 				increment_shovels(state.shovels_to_assemble)
+		// 			}
+	}
 }
 
 uint_slider :: proc(
@@ -716,12 +964,20 @@ button :: proc(pos: rl.Vector2, text: string, id: InputId) -> bool {
 	mouse_over := rl.CheckCollisionPointRec(mouse_pos, button_pos)
 	mouse_down := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
 	mouse_pressed := rl.IsMouseButtonPressed(rl.MouseButton.LEFT)
-	is_focused := state.focused_input == id
+	is_focused: bool
 
-	if !is_focused && mouse_over && mouse_pressed {
-		state.focused_input = id
+	switch focused in state.focus {
+	case nil:
+		is_focused = false
+	case FocusState:
+		is_focused = focused.id == id
 	}
 
+	if !is_focused && mouse_over && mouse_pressed {
+		state.focus = FocusState {
+			id = id,
+		}
+	}
 
 	rl.DrawTextureNPatch(
 		state.ui_atlas,
@@ -793,10 +1049,34 @@ input_uint :: proc(pos: rl.Vector2, width: f32, value: ^uint, id: InputId) {
 	mouse_over := rl.CheckCollisionPointRec(mouse_pos, input_border_pos)
 	mouse_down := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
 	mouse_pressed := rl.IsMouseButtonPressed(rl.MouseButton.LEFT)
-	is_focused := state.focused_input == id
+	is_focused: bool
+	focus: ^FocusState
 
-	if !is_focused && mouse_over && mouse_pressed {
-		state.focused_input = id
+	switch &focused in state.focus {
+	case nil:
+		is_focused = false
+	case FocusState:
+		is_focused = focused.id == id
+		focus = &focused
+	}
+
+	if is_focused {
+		key_pressed := rl.GetKeyPressed()
+
+		for key_pressed != nil {
+			#partial switch key_pressed {
+			case rl.KeyboardKey.UP:
+				value^ += 1
+			case rl.KeyboardKey.DOWN:
+				value^ = max(value^ - 1, 0)
+			}
+
+			key_pressed = rl.GetKeyPressed()
+		}
+	} else if mouse_over && mouse_pressed {
+		state.focus = FocusState {
+			id = id,
+		}
 	}
 
 	rl.DrawTextureNPatch(
@@ -842,6 +1122,7 @@ input_uint :: proc(pos: rl.Vector2, width: f32, value: ^uint, id: InputId) {
 		0,
 		rl.WHITE,
 	)
+
 
 	val_buf: [256]u8
 	val_str := strconv.itoa(val_buf[:], int(value^))
